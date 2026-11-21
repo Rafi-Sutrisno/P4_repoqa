@@ -12,7 +12,8 @@ Folder contents:
   outputs.jsonl     one record per task (RepoQA output format + extra fields)
   dryrun.jsonl      same records without "output" (--dry-run)
   calls.jsonl       one line per LLM call
-  scores.json       original repoqa.compute_score output (all thresholds)
+  scores.json       original repoqa.compute_score output, ignore_comments=False
+  scores_ignore_comments.json   same answers, ignore_comments=True (as the paper)
   complete.json     written when all tasks are done
 """
 
@@ -310,7 +311,11 @@ def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None)
                 },
             }
         )
-        if not args.dry_run:
+        if out.final_answer is not None:  # tool-assisted: the system copies the answer
+            record["ctx"]["meta"]["final_answer"] = True
+            if not args.dry_run:
+                record["output"] = [out.final_answer]
+        elif not args.dry_run:
             reply = logger.chat(prompt, stage="answer", max_tokens=args.max_new_tokens)
             record["output"] = [reply.text]
         record["calls"] = logger.task_calls
@@ -325,11 +330,13 @@ def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None)
     if not args.dry_run:
         from repoqa.compute_score import compute_score
 
-        scores = compute_score(ident["model"], dataset, records, False)
-        scores_path = os.path.join(run_dir, "scores.json")
-        if os.path.exists(scores_path):
-            scores_path = os.path.join(run_dir, f"scores_{datetime.now():%Y%m%d-%H%M%S}.json")
-        _write_new(scores_path, scores)
+        # Same answers, two scorings: RepoQA default and comment-free (as the LongCodeZip paper).
+        for name, ignore in (("scores", False), ("scores_ignore_comments", True)):
+            scores = compute_score(ident["model"], dataset, records, ignore)
+            scores_path = os.path.join(run_dir, f"{name}.json")
+            if os.path.exists(scores_path):
+                scores_path = os.path.join(run_dir, f"{name}_{datetime.now():%Y%m%d-%H%M%S}.json")
+            _write_new(scores_path, scores)
     _write_new(
         os.path.join(run_dir, "complete.json"),
         {"finished_at": datetime.now().isoformat(timespec="seconds"), "n_records": len(records)},

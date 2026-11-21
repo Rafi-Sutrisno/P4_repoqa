@@ -33,6 +33,8 @@ class StrategyInput:
 class StrategyOutput:
     code_context: str  # goes into the original RepoQA template
     meta: Dict = field(default_factory=dict)
+    # Tool-assisted track only (S8 pointer): the system's answer; no answer call is made.
+    final_answer: Optional[str] = None
 
 
 def merge_params(defaults: Dict, given: Dict) -> Dict:
