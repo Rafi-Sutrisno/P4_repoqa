@@ -1,6 +1,16 @@
 from importlib import import_module
 
-NAMES = ("full", "no_context", "random_line", "rag_fn_bm25")
+NAMES = (
+    "full",
+    "no_context",
+    "rag_fn_bm25",
+    "rag_fn_bm25_plus",
+    "struct_bm25",
+    "index_select",
+    "cascade",
+    "rag_sw_bm25",
+    "random_line",
+)
 
 
 def get_strategy(name: str):
