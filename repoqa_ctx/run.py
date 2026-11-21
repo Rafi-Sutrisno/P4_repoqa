@@ -72,6 +72,17 @@ def read_jsonl(path: str) -> List[Dict]:
     return items
 
 
+def ensure_trailing_newline(path: str) -> None:
+    """After an interrupted write, start new lines on a fresh line (never rewrite old data)."""
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        with open(path, "rb") as f:
+            f.seek(-1, os.SEEK_END)
+            last = f.read(1)
+        if last != b"\n":
+            with open(path, "ab") as f:
+                f.write(b"\n")
+
+
 def build_prompt(task: Dict, code_context: str) -> str:
     """Same assembly as evaluate_model: template keys concatenated without separator."""
     fields = {**task, "code_context": code_context}
@@ -79,8 +90,12 @@ def build_prompt(task: Dict, code_context: str) -> str:
 
 
 def needle_retained(gold: str, code_context: str) -> bool:
-    """Is the whole needle (whitespace-normalized) still present in the context?"""
-    return " ".join(gold.split()) in " ".join(code_context.split())
+    """Is the whole needle still present in the context, ignoring all whitespace?
+
+    Whitespace is removed entirely because make_code_context itself inserts a newline at
+    the needle start, which splits a token when the byte offset is misaligned.
+    """
+    return "".join(gold.split()) in "".join(code_context.split())
 
 
 def model_name(args: argparse.Namespace) -> Optional[str]:
@@ -228,7 +243,10 @@ def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None)
     gold = T.gold_functions(dataset)
     records_path = os.path.join(run_dir, "dryrun.jsonl" if args.dry_run else "outputs.jsonl")
     done = {r["uid"] for r in read_jsonl(records_path)}
-    logger = CallLogger(client, os.path.join(run_dir, "calls.jsonl"))
+    calls_path = os.path.join(run_dir, "calls.jsonl")
+    for path in (records_path, calls_path):
+        ensure_trailing_newline(path)
+    logger = CallLogger(client, calls_path)
 
     todo = [t for t in tasks if t["uid"] not in done]
     print(f"{len(tasks)} tasks, {len(done)} done, {len(todo)} to go")
