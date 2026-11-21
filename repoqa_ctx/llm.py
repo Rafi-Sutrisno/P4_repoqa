@@ -150,6 +150,9 @@ class FakeClient(LLMClient):
                          lines whose signature occurs in the gold text (longest first)
     mode="select_first": select = [1, 2, ..., 20]; answer = ""
     mode="empty":        always ""
+    Other stages: confidence (S4) = {"id", "confidence"}; hyde (S5) = guessed code (the gold
+    function for oracle); verify (S6) = "A"/"B" (the candidate holding the gold for oracle);
+    index_build (X1-sum) = a fixed one-sentence summary.
     Every prompt is kept in ``prompts`` so tests can inspect what would be sent.
     """
 
@@ -172,13 +175,33 @@ class FakeClient(LLMClient):
                 hits.append((-len(signature), int(match.group(1))))
         return [number for _, number in sorted(hits)]
 
+    def _oracle_choice(self, prompt: str) -> str:
+        gold = _nows(self.gold or "")
+        parts = re.split(r"^Candidate ([AB]):$", prompt, flags=re.M)
+        for label, body in zip(parts[1::2], parts[2::2]):
+            if gold and gold in _nows(body):
+                return label
+        return "A"
+
     def _reply(self, prompt: str, stage: str) -> str:
+        if self.mode == "empty":
+            return ""
         if stage == "select":
             if self.mode == "select_first":
                 return json.dumps(list(range(1, 21)))
-            if self.mode == "oracle":
-                return json.dumps(self._oracle_ids(prompt))
-            return ""
+            return json.dumps(self._oracle_ids(prompt))
+        if stage == "confidence":  # S4 adaptive_k (llm)
+            ids = self._oracle_ids(prompt) if self.mode == "oracle" else [1]
+            level = "high" if self.mode == "oracle" and ids else "medium"
+            return json.dumps({"id": ids[0] if ids else 1, "confidence": level})
+        if stage == "hyde":  # S5: a guessed implementation
+            if self.mode == "oracle" and self.gold is not None:
+                return "```\n" + self.gold + "\n```"
+            return "```\ndef guess():\n    pass\n```"
+        if stage == "verify":  # S6: "A" or "B"
+            return self._oracle_choice(prompt) if self.mode == "oracle" else "A"
+        if stage == "index_build":  # X1-sum: one-sentence summary
+            return "Summary of the function."
         if self.mode == "oracle" and self.gold is not None:
             return "```\n" + textwrap.dedent(self.gold) + "\n```"
         return ""
