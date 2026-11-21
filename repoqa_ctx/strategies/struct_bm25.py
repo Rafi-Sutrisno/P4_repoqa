@@ -18,8 +18,9 @@ from repoqa_ctx.strategies.common import assemble, greedy_select, skeleton_line,
 from repoqa_ctx.tokens import count_tokens
 
 NEEDS_BUDGET = True
-DEFAULT_PARAMS = {"skeleton": False, "rrf_k": 60, "k1": 1.5, "b": 0.75}
 FIELDS = ("name", "signature", "doc", "body")
+# weights: one per field in FIELDS order; fused score = sum_f w_f / (rrf_k + rank_f).
+DEFAULT_PARAMS = {"skeleton": False, "rrf_k": 60, "k1": 1.5, "b": 0.75, "weights": [1, 1, 1, 1]}
 
 
 def _field(unit: Unit, field: str) -> str:
@@ -31,14 +32,19 @@ def rank_units(description: str, units: List[Unit], params: Dict) -> List[int]:
     params = merge_params(DEFAULT_PARAMS, params)
     cands = [i for i, u in enumerate(units) if u.kind == "function"]
     query = tokenize(description, ENGLISH_STOP_WORDS)
+    weights = params["weights"]
+    if len(weights) != len(FIELDS):
+        raise ValueError(f"weights needs {len(FIELDS)} values ({', '.join(FIELDS)})")
     fused = {i: 0.0 for i in cands}
-    for field in FIELDS:
+    for field, weight in zip(FIELDS, weights):
+        if not weight:
+            continue
         docs = [tokenize(_field(units[i], field), ENGLISH_STOP_WORDS) for i in cands]
         scores = bm25_scores(query, docs, k1=params["k1"], b=params["b"])
         for position, j in enumerate(rank(scores), 1):
             if scores[j] <= 0:
                 break
-            fused[cands[j]] += 1.0 / (params["rrf_k"] + position)
+            fused[cands[j]] += weight / (params["rrf_k"] + position)
     return sorted(cands, key=lambda i: (-fused[i], i))
 
 

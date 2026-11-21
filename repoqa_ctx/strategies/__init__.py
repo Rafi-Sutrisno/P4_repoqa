@@ -8,8 +8,15 @@ NAMES = (
     "struct_bm25",
     "index_select",
     "cascade",
+    "rag_fn_unixcoder",
+    "longcodezip",
     "rag_sw_bm25",
+    "rag_sw_unixcoder",
+    "llmlingua",
+    "llmlingua2",
+    "longllmlingua",
     "random_line",
+    "random_token",
 )
 
 
