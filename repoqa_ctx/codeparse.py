@@ -53,7 +53,8 @@ LEADING_KEYWORDS = {"typescript": re.compile(rb"export\s+(?:default\s+)?$")}
 # Enclosing context for a window that starts inside a class body.
 CLASS_PREFIX = {"java": b"class _ {\n", "typescript": b"class _ {\n"}
 MAX_RETRY_STARTS = 64
-RETRY_SPAN = 0.3  # retry parse starts within the first 30% of the segment
+RETRY_SPAN = 0.3  # retry parse starts within the first 30% of the segment's lines ...
+MIN_RETRY_LINES = 20  # ... but at least its first 20 lines
 
 
 @dataclass(frozen=True)
@@ -150,8 +151,20 @@ def _doc(buf: bytes, unit_node, inner, language) -> str:
     return "\n".join(parts)
 
 
+def _error_count(tree) -> int:
+    count = 0
+    stack = [tree.root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            count += 1
+        if node.has_error:
+            stack.extend(node.children)
+    return count
+
+
 def _walk(buf: bytes, language: str):
-    """Function units of ``buf`` (byte offsets) and whether the parse has errors."""
+    """Function units of ``buf`` (byte offsets) and the parse tree."""
     tree = get_parser(language).parse(buf)
     found = []
     stack = [tree.root_node]
@@ -180,7 +193,7 @@ def _walk(buf: bytes, language: str):
         if fn.start >= last_end and fn.end > fn.start:
             result.append(fn)
             last_end = fn.end
-    return result, tree.root_node.has_error
+    return result, tree
 
 
 def _python_prefix(text: bytes) -> bytes:
@@ -213,33 +226,34 @@ def _context_prefixes(text: bytes, language: str) -> List[bytes]:
 
 
 def _parse_from(data: bytes, language: str, offset: int, prefix: bytes):
-    fns, has_error = _walk(prefix + data[offset:], language)
+    fns, tree = _walk(prefix + data[offset:], language)
     shift = offset - len(prefix)
     return [
         fn._replace(start=fn.start + shift, end=fn.end + shift)
         for fn in fns
         if fn.start >= len(prefix)
-    ], has_error
+    ], tree
 
 
 def _functions(data: bytes, language: str, mid_file: bool) -> List[_Fn]:
-    best, has_error = _parse_from(data, language, 0, b"")
-    if not (mid_file and has_error):
+    best, tree = _parse_from(data, language, 0, b"")
+    if not (mid_file and tree.root_node.has_error):
         return best
-    limit = int(len(data) * RETRY_SPAN)
-    starts = [0] + [i + 1 for i in range(limit) if data[i : i + 1] == b"\n"]
+    line_starts = [0] + [m.end() for m in re.finditer(rb"\n", data) if m.end() < len(data)]
+    starts = line_starts[: max(int(len(line_starts) * RETRY_SPAN), MIN_RETRY_LINES)]
     if len(starts) > MAX_RETRY_STARTS:
         step = len(starts) / MAX_RETRY_STARTS
         starts = [starts[int(k * step)] for k in range(MAX_RETRY_STARTS)]
-    best_cover = sum(fn.end - fn.start for fn in best)
+    # Most function code wins; on a tie, the parse with fewer ERROR/MISSING nodes.
+    best_score = (sum(fn.end - fn.start for fn in best), -_error_count(tree))
     for offset in starts:
         for prefix in _context_prefixes(data[offset:], language):
             if offset == 0 and not prefix:
                 continue
-            fns, _ = _parse_from(data, language, offset, prefix)
-            cover = sum(fn.end - fn.start for fn in fns)
-            if cover > best_cover:
-                best, best_cover = fns, cover
+            fns, tree = _parse_from(data, language, offset, prefix)
+            score = (sum(fn.end - fn.start for fn in fns), -_error_count(tree))
+            if score > best_score:
+                best, best_score = fns, score
     return best
 
 
