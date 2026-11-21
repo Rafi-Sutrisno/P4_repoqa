@@ -68,3 +68,29 @@ def test_unusable_reply_falls_back_to_s1():
     units = split_window(CODE, "python")
     top = units[struct_bm25.rank_units(DESCRIPTION, units, {})[0]]
     assert top.name == "merge_adjacent_strings" and top.text in out.code_context
+
+
+from repoqa_ctx.selection import parse_choice, parse_confidence  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('{"id": 7, "confidence": "high"}', (7, "high")),
+        ('```json\n{"id": "3", "confidence": "Low"}\n```', (3, "low")),
+        ("ID 4, confidence: medium", (4, "medium")),
+        ('{"id": 99, "confidence": "high"}', (None, "high")),  # out of range
+        ("I think it is 5", (5, None)),
+        ("no idea", (None, None)),
+    ],
+)
+def test_parse_confidence(text, expected):
+    assert parse_confidence(text, n=20) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [("B", "B"), ("Answer: A", "A"), ("Candidate B is the one.", "B"), ("neither", None), ("", None)],
+)
+def test_parse_choice(text, expected):
+    assert parse_choice(text) == expected
