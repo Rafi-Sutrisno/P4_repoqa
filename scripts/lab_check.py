@@ -23,7 +23,7 @@ import requests
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from repoqa_ctx import tasks as T  # noqa: E402
-from repoqa_ctx.llm import OllamaClient  # noqa: E402
+from repoqa_ctx.llm import OllamaClient, model_num_ctx  # noqa: E402
 from repoqa_ctx.run import build_prompt  # noqa: E402
 
 MODELS = ["qwen2.5-coder:7b-instruct", "deepseek-coder:6.7b-instruct"]
@@ -98,7 +98,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--url", default="http://localhost:11434")
     p.add_argument("--models", nargs="+", default=MODELS)
-    p.add_argument("--num-ctx", type=int, default=24576)
+    p.add_argument("--num-ctx", type=int, help="default: per model, repoqa_ctx/models.json")
     p.add_argument("--max-new-tokens", type=int, default=1024)
     args = p.parse_args()
     url = args.url.rstrip("/")
@@ -119,7 +119,8 @@ def main():
             print(f"[missing] {model}  ->  run: ollama pull {model}")
             report["models"].append({"model": model, "installed": False})
             continue
-        res = check_model(url, model, args.num_ctx, long_prompt, args.max_new_tokens)
+        num_ctx = args.num_ctx or model_num_ctx(model)
+        res = check_model(url, model, num_ctx, long_prompt, args.max_new_tokens)
         res["installed"] = True
         report["models"].append(res)
         by = {c["label"]: c for c in res["calls"]}

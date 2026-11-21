@@ -7,7 +7,7 @@ results. Resuming:
   --resume DIR    continue that run folder with the settings stored in it
 
 Folder contents:
-  run_config.json   settings, git commit, Ollama version, seed (written once)
+  run_config.json   settings, git commit, Ollama version, `ollama ps` offload, seed (once)
   resume_*.json     git commit / Ollama version at each resume
   outputs.jsonl     one record per task (RepoQA output format + extra fields)
   dryrun.jsonl      same records without "output" (--dry-run)
@@ -22,13 +22,12 @@ import os
 import re
 import subprocess
 import sys
-import textwrap
 import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
 from repoqa_ctx import tasks as T
-from repoqa_ctx.llm import CallLogger, FakeClient, LLMClient, OllamaClient
+from repoqa_ctx.llm import CallLogger, FakeClient, LLMClient, OllamaClient, model_num_ctx
 from repoqa_ctx.strategies import get_strategy
 from repoqa_ctx.strategies.base import StrategyInput, merge_params
 from repoqa_ctx.tokens import count_tokens
@@ -42,13 +41,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--strategy-args", default="{}", help="JSON dict of strategy parameters")
     p.add_argument("--budget", type=int, help="max code-context tokens (CodeLlama tokenizer)")
     p.add_argument("--dry-run", action="store_true", help="build contexts only, no LLM call")
-    p.add_argument("--limit", type=int, help="first N tasks (dataset order)")
+    p.add_argument("--limit", type=int, help="N tasks spread evenly over the languages")
     p.add_argument("--languages", type=lambda s: [x for x in s.split(",") if x])
     p.add_argument("--model", help="Ollama model name, e.g. qwen2.5-coder:7b-instruct")
     p.add_argument("--llm", choices=["ollama", "fake"], default="ollama")
-    p.add_argument("--fake-mode", choices=["oracle", "empty"], default="oracle")
+    p.add_argument(
+        "--fake-mode",
+        choices=FakeClient.MODES,
+        default="oracle",
+        help="fake LLM behaviour (--llm fake, and the select stage of --dry-run)",
+    )
     p.add_argument("--ollama-url", default="http://localhost:11434")
-    p.add_argument("--num-ctx", type=int, default=24576)
+    p.add_argument("--num-ctx", type=int, help="default: per model, repoqa_ctx/models.json")
     p.add_argument("--max-new-tokens", type=int, default=1024)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--code-context-size", type=int, default=16 * 1024)
@@ -108,6 +112,10 @@ def model_name(args: argparse.Namespace) -> Optional[str]:
     return args.model
 
 
+def resolve_num_ctx(args: argparse.Namespace) -> int:
+    return args.num_ctx if args.num_ctx is not None else model_num_ctx(args.model)
+
+
 def run_identity(args: argparse.Namespace, strategy) -> Dict:
     """Settings that define a run; --resume auto only continues runs with equal identity."""
     llm = "none" if args.dry_run else args.llm
@@ -117,7 +125,8 @@ def run_identity(args: argparse.Namespace, strategy) -> Dict:
         "budget": args.budget,
         "model": model_name(args),
         "llm": llm,
-        "num_ctx": args.num_ctx if llm == "ollama" else None,
+        "fake_mode": args.fake_mode if llm in ("fake", "none") else None,
+        "num_ctx": resolve_num_ctx(args) if llm == "ollama" else None,
         "max_new_tokens": None if args.dry_run else args.max_new_tokens,
         "seed": args.seed,
         "code_context_size": args.code_context_size,
@@ -182,11 +191,24 @@ def _write_new(path: str, obj: Dict) -> None:
 
 
 def make_client(args: argparse.Namespace) -> LLMClient:
-    if args.dry_run:
-        return FakeClient("empty")  # dry-run never calls the answer model
-    if args.llm == "fake":
-        return FakeClient(args.fake_mode)
-    return OllamaClient(model_name(args), url=args.ollama_url, num_ctx=args.num_ctx, seed=args.seed)
+    if args.dry_run or args.llm == "fake":
+        return FakeClient(args.fake_mode)  # dry-run: only select stages, never the answer
+    return OllamaClient(
+        model_name(args), url=args.ollama_url, num_ctx=resolve_num_ctx(args), seed=args.seed
+    )
+
+
+def ollama_stamp(client: LLMClient) -> Dict:
+    """Ollama version, warm-up time and offload status (`ollama ps`) after loading."""
+    if not isinstance(client, OllamaClient):
+        return {"ollama_version": None}
+    start = time.perf_counter()
+    client.chat("Reply with OK.", max_tokens=1)  # loads the model with this num_ctx
+    return {
+        "ollama_version": client.version(),
+        "warmup_s": round(time.perf_counter() - start, 2),
+        "ollama_ps": client.ps(),
+    }
 
 
 def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None) -> str:
@@ -212,9 +234,8 @@ def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None)
         return run_dir
 
     client = client or make_client(args)
-    ollama_version = client.version() if isinstance(client, OllamaClient) else None
     commit, dirty = git_info()
-    stamp = {"git_commit": commit, "git_dirty": dirty, "ollama_version": ollama_version}
+    stamp = {"git_commit": commit, "git_dirty": dirty, **ollama_stamp(client)}
     if run_dir is None:
         run_dir = new_run_dir(args.result_dir, ident)
         _write_new(
@@ -263,6 +284,8 @@ def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None)
         )
         logger.context = {"uid": uid, "strategy": args.strategy}
         logger.task_calls = []
+        if isinstance(client, FakeClient):
+            client.gold = gold[uid]  # fake only; strategies never see it
         start = time.perf_counter()
         out = strategy.build_context(inp, logger)
         build_s = time.perf_counter() - start
@@ -288,8 +311,6 @@ def run_experiment(args: argparse.Namespace, client: Optional[LLMClient] = None)
             }
         )
         if not args.dry_run:
-            if isinstance(client, FakeClient):
-                client.oracle_answer = "```\n" + textwrap.dedent(gold[uid]) + "\n```"
             reply = logger.chat(prompt, stage="answer", max_tokens=args.max_new_tokens)
             record["output"] = [reply.text]
         record["calls"] = logger.task_calls

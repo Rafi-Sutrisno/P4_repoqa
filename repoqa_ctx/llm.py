@@ -1,6 +1,9 @@
 """LLM clients (Ollama, fake) and a logger that writes one JSON line per LLM call."""
 
 import json
+import os
+import re
+import textwrap
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -26,8 +29,20 @@ class LLMResult:
 class LLMClient:
     model: str = ""
 
-    def chat(self, prompt: str, *, max_tokens: int, system: Optional[str] = None) -> LLMResult:
+    def chat(
+        self, prompt: str, *, max_tokens: int, system: Optional[str] = None, stage: str = "answer"
+    ) -> LLMResult:
         raise NotImplementedError
+
+
+MODELS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models.json")
+
+
+def model_num_ctx(model: Optional[str]) -> int:
+    """num_ctx for a model from repoqa_ctx/models.json (falls back to the default)."""
+    with open(MODELS_PATH, encoding="utf-8") as f:
+        cfg = json.load(f)
+    return cfg["num_ctx"].get(model, cfg["default_num_ctx"])
 
 
 def _count_prompt(prompt: str, system: Optional[str]) -> int:
@@ -78,7 +93,9 @@ class OllamaClient(LLMClient):
                 print(f"Ollama request failed ({e}); retrying in {wait}s")
                 time.sleep(wait)
 
-    def chat(self, prompt: str, *, max_tokens: int, system: Optional[str] = None) -> LLMResult:
+    def chat(
+        self, prompt: str, *, max_tokens: int, system: Optional[str] = None, stage: str = "answer"
+    ) -> LLMResult:
         payload = {
             "model": self.model,
             "messages": construct_message_list(prompt, system),
@@ -108,26 +125,69 @@ class OllamaClient(LLMClient):
         resp.raise_for_status()
         return resp.json()["version"]
 
+    def ps(self) -> Optional[Dict]:
+        """Loaded-model status from /api/ps (size, size_vram, ...) for this model."""
+        resp = requests.get(self.url + "/api/ps", timeout=30)
+        resp.raise_for_status()
+        for entry in resp.json().get("models", []):
+            if self.model in (entry.get("name"), entry.get("model")):
+                info = {k: entry.get(k) for k in ("size", "size_vram", "context_length")}
+                if info["size"]:
+                    info["vram_share"] = round((info["size_vram"] or 0) / info["size"], 3)
+                return info
+        return None
+
+
+def _nows(text: str) -> str:
+    return "".join(text.split())
+
 
 class FakeClient(LLMClient):
-    """Deterministic client for pipeline tests.
+    """Deterministic client for pipeline tests and dry-runs.
 
-    mode="oracle": returns ``oracle_answer`` (set by the caller before each call).
-    mode="empty": returns an empty string.
+    The caller sets ``gold`` (ground-truth needle text) before each task.
+    mode="oracle":       answer = the gold function in a code block; select = IDs of index
+                         lines whose signature occurs in the gold text (longest first)
+    mode="select_first": select = [1, 2, ..., 20]; answer = ""
+    mode="empty":        always ""
     Every prompt is kept in ``prompts`` so tests can inspect what would be sent.
     """
 
+    MODES = ("oracle", "select_first", "empty")
+
     def __init__(self, mode: str = "oracle"):
-        if mode not in ("oracle", "empty"):
+        if mode not in self.MODES:
             raise ValueError(f"unknown fake mode: {mode}")
         self.mode = mode
         self.model = f"fake-{mode}"
-        self.oracle_answer: Optional[str] = None
+        self.gold: Optional[str] = None
         self.prompts: List[str] = []
 
-    def chat(self, prompt: str, *, max_tokens: int, system: Optional[str] = None) -> LLMResult:
+    def _oracle_ids(self, prompt: str) -> List[int]:
+        gold = _nows(self.gold or "")
+        hits = []
+        for match in re.finditer(r"^\[(\d+)\] (.*)$", prompt, re.M):
+            signature = _nows(match.group(2).split(": ", 1)[-1])
+            if signature and signature in gold:
+                hits.append((-len(signature), int(match.group(1))))
+        return [number for _, number in sorted(hits)]
+
+    def _reply(self, prompt: str, stage: str) -> str:
+        if stage == "select":
+            if self.mode == "select_first":
+                return json.dumps(list(range(1, 21)))
+            if self.mode == "oracle":
+                return json.dumps(self._oracle_ids(prompt))
+            return ""
+        if self.mode == "oracle" and self.gold is not None:
+            return "```\n" + textwrap.dedent(self.gold) + "\n```"
+        return ""
+
+    def chat(
+        self, prompt: str, *, max_tokens: int, system: Optional[str] = None, stage: str = "answer"
+    ) -> LLMResult:
         self.prompts.append(prompt)
-        text = (self.oracle_answer or "") if self.mode == "oracle" else ""
+        text = self._reply(prompt, stage)
         return LLMResult(
             text=text,
             prompt_tokens=_count_prompt(prompt, system),
@@ -162,7 +222,7 @@ class CallLogger:
             "model": self.client.model,
         }
         try:
-            result = self.client.chat(prompt, max_tokens=max_tokens, system=system)
+            result = self.client.chat(prompt, max_tokens=max_tokens, system=system, stage=stage)
         except Exception as e:
             line.update({"ok": False, "error": repr(e)})
             self._write(line)

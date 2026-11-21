@@ -87,7 +87,23 @@ def build_tasks(
     cache_dir: Optional[str] = None,
     caching: bool = True,
 ) -> List[Dict]:
-    """Return tasks in the original order; each task gets an extra ``uid`` field."""
+    """Return tasks in the original order; each task gets an extra ``uid`` field.
+
+    ``limit``: N tasks spread evenly over the selected languages (the first ones of each
+    language in dataset order), so a quick run touches every language.
+    """
+    if limit is not None:
+        langs = [lang for lang in dataset if languages is None or lang in languages]
+        tasks = []
+        for i, lang in enumerate(langs):
+            quota = limit // len(langs) + (1 if i < limit % len(langs) else 0)
+            if quota:
+                tasks += _build_tasks(dataset, code_context_size, [lang], cache_dir, caching, quota)
+        return tasks
+    return _build_tasks(dataset, code_context_size, languages, cache_dir, caching)
+
+
+def _build_tasks(dataset, code_context_size, languages, cache_dir, caching, limit=None):
     cache_dir = cache_dir or TASK_CACHE_DIR
     cache_file = os.path.join(
         cache_dir, f"repoqa_ctx_tasks_ntoken_{code_context_size}_v1.jsonl"

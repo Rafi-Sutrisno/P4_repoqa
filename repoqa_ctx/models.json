@@ -1,0 +1,7 @@
+{
+  "default_num_ctx": 24576,
+  "num_ctx": {
+    "qwen2.5-coder:7b-instruct": 24576,
+    "deepseek-coder:6.7b-instruct": 24576
+  }
+}
