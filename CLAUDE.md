@@ -17,8 +17,9 @@ Pertanyaan inti: apakah seleksi fungsi yang melibatkan LLM mengalahkan seleksi m
 
 - Jangan ubah kode asli repoqa/ dan scripts/. Kode baru di repoqa_ctx/ dan tests/.
 - Strategi full harus identik dengan RepoQA asli (dibuktikan tes). Jangan ubah penilaian bawaan.
-- Strategi hanya menerima ID opak, jendela kode, dan deskripsi. Dilarang memakai nama, path, posisi
-  needle, atau pengetahuan konstruksi benchmark (FUNCTION_QUERY, kriteria needle).
+- Strategi hanya menerima ID opak, bahasa (language), jendela kode, dan deskripsi, ditambah
+  konfigurasi run (budget, params, seed). Dilarang memakai nama, path, posisi needle, atau
+  pengetahuan konstruksi benchmark (FUNCTION_QUERY, kriteria needle).
 - Anggaran token = tokenizer CodeLlama RepoQA. Semua panggilan LLM tambahan dihitung sebagai token.
 - Tuning hanya di split dev; laporan di split test. Split dibuat dengan seed tetap dan di-commit.
 - Jangan mengarang parameter paper. Tidak yakin -> tulis TODO di docs/DECISIONS.md.
