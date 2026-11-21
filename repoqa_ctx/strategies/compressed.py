@@ -22,7 +22,7 @@ def from_cache(name: str, inp: StrategyInput, defaults: Dict) -> StrategyOutput:
             f"python -m repoqa_ctx.compress --strategy {name} --budget {inp.budget} ..."
         )
     context = entry["code_context"]
-    if count_tokens(context) > inp.budget:
+    if inp.budget is not None and count_tokens(context) > inp.budget:
         raise RuntimeError(f"cached context for {inp.uid} exceeds the budget {inp.budget}")
     return StrategyOutput(
         code_context=context,

@@ -19,13 +19,14 @@ COMPRESS_STRATEGIES = (
     "llmlingua",
     "llmlingua2",
     "longllmlingua",
+    "rag_paper_unixcoder",
 )
 
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="compress stage (needs torch)")
     p.add_argument("--strategy", required=True, choices=COMPRESS_STRATEGIES)
-    p.add_argument("--budget", type=int, required=True)
+    p.add_argument("--budget", type=int, help="required unless the strategy has no budget")
     p.add_argument("--strategy-args", default="{}")
     p.add_argument("--limit", type=int)
     p.add_argument("--languages", type=lambda s: [x for x in s.split(",") if x])
@@ -36,9 +37,12 @@ def parse_args(argv=None):
 
 
 def run_compress(args) -> str:
-    params = merge_params(
-        get_strategy(args.strategy).DEFAULT_PARAMS, json.loads(args.strategy_args)
-    )
+    module = get_strategy(args.strategy)
+    if module.NEEDS_BUDGET and args.budget is None:
+        raise SystemExit(f"{args.strategy} needs --budget")
+    if not module.NEEDS_BUDGET:
+        args.budget = None
+    params = merge_params(module.DEFAULT_PARAMS, json.loads(args.strategy_args))
     dataset = T.load_dataset(args.dataset_path)
     tasks = T.build_tasks(dataset, args.code_context_size, args.languages, args.limit)
     done = compress_cache.load(args.strategy, params, args.budget)

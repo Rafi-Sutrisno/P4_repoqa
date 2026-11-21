@@ -12,6 +12,7 @@ NAMES = (
     "longcodezip",
     "rag_sw_bm25",
     "rag_sw_unixcoder",
+    "rag_paper_unixcoder",
     "llmlingua",
     "llmlingua2",
     "longllmlingua",

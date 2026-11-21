@@ -113,6 +113,25 @@ class UnixcoderRAG:
         context = "\n".join(chunks[j] for j in picked)
         return context, {"n_chunks": len(chunks), "n_selected": len(picked)}, used
 
+    def compress_paper(self, task: Dict, params: Dict):
+        """Paper version, exactly the official compress_context (main.py:165-207): top-k
+        chunks without a token budget, in similarity order, joined with "\\n"."""
+        code = task["code_context"]
+        if params["chunking"] == "sliding_window":
+            chunks = chunk_by_sliding_window(code, params["window_lines"], params["overlap_lines"])
+        else:
+            chunks = chunk_by_function(code, task["language"])
+        query, used = self._embed(task["description"])
+        sims = []
+        for chunk in chunks:
+            emb, n = self._embed(chunk)
+            used += n
+            sims.append(torch.cosine_similarity(query, emb, dim=0).item())
+        # main.py:160-162: sort by similarity (stable for ties), keep the first top_k.
+        ranked = sorted(range(len(chunks)), key=lambda i: sims[i], reverse=True)[: params["top_k"]]
+        context = "\n".join(chunks[i] for i in ranked)
+        return context, {"n_chunks": len(chunks), "n_selected": len(ranked)}, used
+
 
 # --- LongCodeZip (official CodeCompressor, rank-only) --------------------------------------
 def _load_official_code_compressor():
@@ -194,9 +213,11 @@ class LLMLinguaFamily:
         code = task["code_context"].replace("<|endoftext|>", "")  # main.py:221-222
         question = task["description"] + INSTRUCTION  # main.py:231
         if self.kind == "llmlingua2":
-            # LLMLingua-2 is not in the official RepoQA code; force_tokens from the
-            # llmlingua README example.
-            res = self.pc.compress_prompt(code, target_token=target, force_tokens=["\n", "?"])
+            # LLMLingua-2 is not in the official RepoQA code; default force_tokens from the
+            # llmlingua README example (["\n", "?"]); a variant drops "\n".
+            res = self.pc.compress_prompt(
+                code, target_token=target, force_tokens=list(params["force_tokens"])
+            )
         elif self.kind == "longllmlingua":
             # Line chunks as called in main.py:612-613 (window 20, overlap 10) with
             # rank_method="longllmlingua" (main.py:279).
@@ -244,6 +265,9 @@ class LLMLinguaFamily:
 
 def make_compressor(strategy: str, params: Dict, device: str):
     model = params["compressor_model"]
+    if strategy == "rag_paper_unixcoder":
+        rag = UnixcoderRAG(model, device)
+        return lambda task, budget: rag.compress_paper(task, params)
     if strategy in ("rag_fn_unixcoder", "rag_sw_unixcoder"):
         rag = UnixcoderRAG(model, device)
         sliding = strategy == "rag_sw_unixcoder"

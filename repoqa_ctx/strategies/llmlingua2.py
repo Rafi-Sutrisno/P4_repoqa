@@ -8,7 +8,10 @@ from repoqa_ctx.strategies.base import StrategyInput, StrategyOutput
 from repoqa_ctx.strategies.compressed import from_cache
 
 NEEDS_BUDGET = True
-DEFAULT_PARAMS = {"compressor_model": "microsoft/llmlingua-2-xlm-roberta-large-meetingbank"}
+DEFAULT_PARAMS = {
+    "compressor_model": "microsoft/llmlingua-2-xlm-roberta-large-meetingbank",
+    "force_tokens": ["\n", "?"],  # llmlingua README example; variant: ["?"]
+}
 
 
 def build_context(inp: StrategyInput, llm=None) -> StrategyOutput:
