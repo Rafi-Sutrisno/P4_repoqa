@@ -6,6 +6,7 @@ repoqa-*.json
 repoqa/_version.py
 referensi/
 third_party/
+.venv-compress/
 
 # Raw experiment outputs stay local; summaries go to reports/ (committed)
 results/
