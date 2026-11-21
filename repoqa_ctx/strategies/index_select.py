@@ -3,7 +3,9 @@ then contains only the picked functions.
 
 Call 1 (stage "select"): the function units of the window in original order, one line each,
     [7] src/pkg/file.py: def foo(a, b):
-plus, with index="doc", the first line of the unit's docstring/comments as "    doc: ...".
+plus, with index="doc", the first line of the unit's docstring/comments as "    doc: ...",
+or with index="sum" (X1-sum) a one-sentence LLM summary as "    summary: ..." (stage
+"index_build", cached per unit text; see repoqa_ctx/summary_cache.py).
 The LLM returns at most k IDs as a JSON list. If no usable ID comes back, the S1
 (struct_bm25) ranking is used instead. Call 2 (stage "answer") is made by the runner with the
 original RepoQA prompt; its code_context holds the picked units (LLM order, within budget),
@@ -41,7 +43,7 @@ def first_doc_line(doc: str) -> str:
     return ""
 
 
-def index_lines(units: List[Unit], cands: List[int], index: str) -> str:
+def index_lines(units: List[Unit], cands: List[int], index: str, summaries=None) -> str:
     lines = []
     for number, i in enumerate(cands, 1):
         unit = units[i]
@@ -53,9 +55,11 @@ def index_lines(units: List[Unit], cands: List[int], index: str) -> str:
     return "\n".join(lines)
 
 
-def select_prompt(units: List[Unit], cands: List[int], description: str, params: Dict) -> str:
+def select_prompt(
+    units: List[Unit], cands: List[int], description: str, params: Dict, summaries=None
+) -> str:
     instruction = SELECT_INSTRUCTION.format(k=params["k"])
-    index = index_lines(units, cands, params["index"])
+    index = index_lines(units, cands, params["index"], summaries)
     return f"{instruction}\n\nFunctions:\n{index}\n{description}\n{instruction}"
 
 
@@ -63,9 +67,14 @@ def select_and_build(
     inp: StrategyInput, llm, units: List[Unit], cands: List[int], fallback: List[int], params
 ) -> StrategyOutput:
     """Ask the LLM to pick from ``cands`` (unit indices, original order); build the context."""
-    if params["index"] not in ("sig", "doc"):
-        raise ValueError(f"index must be 'sig' or 'doc', got {params['index']!r}")
-    prompt = select_prompt(units, cands, inp.description, params)
+    if params["index"] not in ("sig", "doc", "sum"):
+        raise ValueError(f"index must be 'sig', 'doc' or 'sum', got {params['index']!r}")
+    summaries = None
+    if params["index"] == "sum":
+        from repoqa_ctx import summary_cache
+
+        summaries = summary_cache.summaries(units, cands, llm)
+    prompt = select_prompt(units, cands, inp.description, params, summaries)
     reply = llm.chat(prompt, stage="select", max_tokens=params["select_max_tokens"])
     ids = parse_ids(reply.text, len(cands), params["k"])
     picked = [cands[i - 1] for i in ids]
