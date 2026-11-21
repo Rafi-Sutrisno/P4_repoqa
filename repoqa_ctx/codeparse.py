@@ -66,6 +66,7 @@ class Unit:
     name: str = ""  # function units only
     signature: str = ""  # function units: text before the body, whitespace collapsed
     doc: str = ""  # function units: docstring, leading comments, comments inside
+    container: str = ""  # function units: enclosing class/struct/impl name, if any
 
 
 class _Fn(NamedTuple):
@@ -74,6 +75,38 @@ class _Fn(NamedTuple):
     name: str
     signature: str
     doc: str
+    container: str
+
+
+# Node types whose name identifies the type a method belongs to (general syntax).
+CONTAINER_NODE_TYPES = {
+    "python": {"class_definition"},
+    "java": {"class_declaration", "interface_declaration", "enum_declaration", "record_declaration"},
+    "typescript": {"class_declaration", "abstract_class_declaration", "class", "interface_declaration"},
+    "rust": {"impl_item", "trait_item"},
+    "cpp": {"class_specifier", "struct_specifier"},
+    "go": set(),
+}
+
+
+def _container(buf: bytes, node, inner, name, language: str) -> str:
+    """Enclosing class/struct/impl (rust: impl type; go: receiver type; cpp: A::b -> A)."""
+    if language == "go" and inner.type == "method_declaration":
+        receiver = inner.child_by_field_name("receiver")
+        if receiver is not None:
+            words = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", _text(buf, receiver))
+            return words[-1] if words else ""
+    if language == "cpp" and name is not None and "::" in _text(buf, name):
+        return _text(buf, name).rsplit("::", 1)[0]
+    parent = node.parent
+    while parent is not None:
+        if parent.type in CONTAINER_NODE_TYPES[language]:
+            field = "type" if parent.type == "impl_item" else "name"
+            target = parent.child_by_field_name(field)
+            text = _text(buf, target) if target is not None else ""
+            return "" if text == "_" else text  # "_" = synthetic recovery class
+        parent = parent.parent
+    return ""
 
 
 @lru_cache(maxsize=None)
@@ -185,6 +218,7 @@ def _walk(buf: bytes, language: str):
                 _text(buf, name) if name is not None else "",
                 signature,
                 _doc(buf, node, inner, language),
+                _container(buf, node, inner, name, language),
             )
         )
     found.sort()
@@ -298,6 +332,7 @@ def _split_code(text: str, language: str, segment: int, path: str, mid_file: boo
                     fn.name,
                     fn.signature,
                     fn.doc,
+                    fn.container,
                 )
             )
             pos = fn.end
