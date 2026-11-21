@@ -29,6 +29,12 @@ FUNCTION_NODE_TYPES = {
 }
 
 
+# Keywords right before a function that belong to it. make_code_context inserts a newline
+# at the needle start, so "export async function f" becomes "export \nasync function f"
+# and tree-sitter no longer sees an export_statement.
+LEADING_KEYWORDS = {"typescript": re.compile(rb"export\s+(?:default\s+)?$")}
+
+
 @dataclass(frozen=True)
 class Unit:
     kind: str  # "header" | "function" | "code"
@@ -49,7 +55,10 @@ def _function_spans(code: bytes, language: str) -> List[Tuple[int, int]]:
     stack = [tree.root_node]
     while stack:
         node = stack.pop()
-        if node.type in types:
+        is_exported_function = node.type == "export_statement" and any(
+            child.type in types for child in node.children
+        )  # TS: keep "export" with its function, as a line-based reader would see it
+        if node.type in types or is_exported_function:
             spans.append((node.start_byte, node.end_byte))
             continue  # nested functions stay inside their enclosing unit
         stack.extend(node.children)
@@ -67,7 +76,12 @@ def _split_code(text: str, language: str, segment: int) -> List[Unit]:
     pieces = []
     pos = 0
     try:
+        keyword = LEADING_KEYWORDS.get(language)
         for start, end in _function_spans(data, language):
+            if keyword is not None:
+                match = keyword.search(data, pos, start)
+                if match and match.end() == start:
+                    start = match.start()
             # Attach the indentation before a function that starts its own line.
             s = start
             while s > pos and data[s - 1 : s] in (b" ", b"\t"):
