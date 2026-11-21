@@ -9,7 +9,7 @@ order with Path headers. skeleton=true: the remaining budget shows other functio
 signature line each, in fused order.
 """
 
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 from repoqa_ctx.bm25 import ENGLISH_STOP_WORDS, bm25_scores, rank, tokenize
 from repoqa_ctx.codeparse import Unit, split_window
@@ -27,25 +27,37 @@ def _field(unit: Unit, field: str) -> str:
     return unit.text if field == "body" else getattr(unit, field)
 
 
-def rank_units(description: str, units: List[Unit], params: Dict) -> List[int]:
-    """Function-unit indices in fused order (also used by index_select and cascade)."""
+def fused_scores(
+    description: str, units: List[Unit], params: Dict, extra_queries: Sequence[str] = ()
+) -> Dict[int, float]:
+    """Fused RRF score per function unit. Every query (the description, then any extra
+    query such as a HyDE guess) is ranked per field; all rankings are fused together."""
     params = merge_params(DEFAULT_PARAMS, params)
     cands = [i for i, u in enumerate(units) if u.kind == "function"]
-    query = tokenize(description, ENGLISH_STOP_WORDS)
     weights = params["weights"]
     if len(weights) != len(FIELDS):
         raise ValueError(f"weights needs {len(FIELDS)} values ({', '.join(FIELDS)})")
     fused = {i: 0.0 for i in cands}
+    queries = [tokenize(q, ENGLISH_STOP_WORDS) for q in (description, *extra_queries)]
     for field, weight in zip(FIELDS, weights):
         if not weight:
             continue
         docs = [tokenize(_field(units[i], field), ENGLISH_STOP_WORDS) for i in cands]
-        scores = bm25_scores(query, docs, k1=params["k1"], b=params["b"])
-        for position, j in enumerate(rank(scores), 1):
-            if scores[j] <= 0:
-                break
-            fused[cands[j]] += weight / (params["rrf_k"] + position)
-    return sorted(cands, key=lambda i: (-fused[i], i))
+        for query in queries:
+            scores = bm25_scores(query, docs, k1=params["k1"], b=params["b"])
+            for position, j in enumerate(rank(scores), 1):
+                if scores[j] <= 0:
+                    break
+                fused[cands[j]] += weight / (params["rrf_k"] + position)
+    return fused
+
+
+def rank_units(
+    description: str, units: List[Unit], params: Dict, extra_queries: Sequence[str] = ()
+) -> List[int]:
+    """Function-unit indices in fused order (also used by index_select, cascade, S4-S8)."""
+    fused = fused_scores(description, units, params, extra_queries)
+    return sorted(fused, key=lambda i: (-fused[i], i))
 
 
 def _add_skeleton(units: List[Unit], ranked: List[int], selected: set, budget: int):
