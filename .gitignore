@@ -4,6 +4,11 @@
 repoqa-*.json
 *.bak
 repoqa/_version.py
+referensi/
+third_party/
+
+# Raw experiment outputs stay local; summaries go to reports/ (committed)
+results/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

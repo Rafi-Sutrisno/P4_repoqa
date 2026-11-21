@@ -1,0 +1,17 @@
+# Dependencies for repoqa_ctx (Python 3.11; tree-sitter has no wheels for 3.13).
+# Covers the original RepoQA evaluation path (task building + scoring) and the new code.
+# vllm, torch and API SDKs are intentionally not included.
+tree-sitter==0.21.3
+tree-sitter-languages==1.10.2
+transformers==4.57.6
+tokenizers==0.22.2
+huggingface_hub==0.36.2
+nltk==3.10.4
+numpy==2.4.6
+rich==15.0.0
+tempdir==0.7.1
+appdirs==1.4.4
+wget==3.2
+fire==0.7.1
+requests==2.34.2
+pytest==9.2.0
