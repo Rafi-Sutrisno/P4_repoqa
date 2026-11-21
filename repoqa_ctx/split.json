@@ -1,0 +1,11 @@
+{
+  "seed": 0,
+  "dev_repos": {
+    "cpp": "polybar/polybar",
+    "go": "nsqio/nsq",
+    "java": "GoogleContainerTools/jib",
+    "python": "mlc-ai/mlc-llm",
+    "rust": "serde-rs/serde",
+    "typescript": "openai/openai-node"
+  }
+}
