@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # All lab runs, by tier:
 #   A  600 tasks, B=2048: full, no_context, rag_fn_bm25, rag_fn_bm25_plus, rag_fn_unixcoder,
-#      struct_bm25 (dev-selected weights), index_select, cascade, longcodezip
-#   B  120 tasks (20 per language), B=2048: every other strategy/variant
+#      struct_bm25 (dev-selected weights), index_select, cascade, longcodezip (1.5B)
+#   B  120 tasks (20 per language), B=2048: every other strategy/variant, incl. S4-S7,
+#      X1-sum, rag_paper_unixcoder (no budget), llmlingua2 x2, longcodezip 0.5B;
+#      then S8 pointer as a separate tool-assisted track (no budget)
 #   C  120 tasks: B=1024 and B=4096 for the budgeted tier-A strategies
 #   D  DeepSeek: tier A only
 # Two rounds: round 1 = every config with --limit 30 (5 per language) to catch errors;
@@ -37,7 +39,10 @@ RESULT_DIR="${RESULT_DIR:-results/ctx}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 COMPRESS_DEVICE="${COMPRESS_DEVICE:-auto}"
 STRUCT_W='{"weights": [3, 1, 1, 3]}'  # reports/struct_weights_dev.md
-COMPRESSED=" rag_fn_unixcoder rag_sw_unixcoder longcodezip llmlingua llmlingua2 longllmlingua "
+W='"weights": [3, 1, 1, 3]'           # the same S1 weights inside S4-S8
+LCZ_A='{"compressor_model": "Qwen/Qwen2.5-Coder-1.5B-Instruct"}'  # longcodezip, tiers A/C
+LCZ_B='{"compressor_model": "Qwen/Qwen2.5-Coder-0.5B-Instruct"}'  # longcodezip, tier B
+COMPRESSED=" rag_fn_unixcoder rag_sw_unixcoder rag_paper_unixcoder longcodezip llmlingua llmlingua2 longllmlingua "
 
 cfg() {  # cfg <model> <strategy> <strategy args JSON> <budget or -> <limit or ->
   local model=$1 strategy=$2 sargs=$3 budget=$4 limit=$5
@@ -60,7 +65,7 @@ tier_a_budgeted() {  # tier_a_budgeted <model> <budget> <limit>
   cfg "$m" struct_bm25 "$STRUCT_W" "$b" "$l"
   cfg "$m" index_select '{}' "$b" "$l"
   cfg "$m" cascade '{}' "$b" "$l"
-  cfg "$m" longcodezip '{}' "$b" "$l"
+  cfg "$m" longcodezip "$LCZ_A" "$b" "$l"
 }
 
 tier_a() {  # tier_a <model> <limit>
@@ -79,9 +84,25 @@ tier_b() {  # tier_b <model> <limit>
   cfg "$m" index_select '{"index": "doc"}' 2048 "$l"
   cfg "$m" longllmlingua '{}' 2048 "$l"
   cfg "$m" llmlingua '{}' 2048 "$l"
-  cfg "$m" llmlingua2 '{}' 2048 "$l"
+  cfg "$m" llmlingua2 '{}' 2048 "$l"                          # force_tokens with newline and "?"
+  cfg "$m" llmlingua2 '{"force_tokens": ["?"]}' 2048 "$l"     # without the newline
+  cfg "$m" longcodezip "$LCZ_B" 2048 "$l"
+  cfg "$m" rag_paper_unixcoder '{}' - "$l"                    # paper version, no budget
+  cfg "$m" adaptive_k "{\"signal\": \"margin\", $W}" 2048 "$l"  # S4
+  cfg "$m" adaptive_k "{\"signal\": \"units\", $W}" 2048 "$l"
+  cfg "$m" adaptive_k "{\"signal\": \"llm\", $W}" 2048 "$l"
+  cfg "$m" hyde_code "{\"then\": \"s1\", $W}" 2048 "$l"     # S5
+  cfg "$m" hyde_code "{\"then\": \"s3\", $W}" 2048 "$l"
+  cfg "$m" pair_verify "{$W}" 2048 "$l"                        # S6
+  cfg "$m" graph_neighbors "{$W}" 2048 "$l"                    # S7
+  cfg "$m" index_select '{"index": "sum"}' 2048 "$l"          # X1-sum
   cfg "$m" random_line '{}' 2048 "$l"
   cfg "$m" random_token '{}' 2048 "$l"
+}
+
+tier_b_tool() {  # tier_b_tool <model> <limit>: S8, separate track "dibantu alat"
+  echo "--- tier B, tool-assisted track (dibantu alat): the system copies the answer"
+  cfg "$1" pointer "{$W}" - "$2"
 }
 
 tier_c() {  # tier_c <model> <limit>
@@ -94,12 +115,14 @@ for round in $ROUNDS; do
     echo "=== round 1 (--limit 30): Qwen A, B, C; DeepSeek A"
     tier_a "$QWEN" 30
     tier_b "$QWEN" 30
+    tier_b_tool "$QWEN" 30
     tier_c "$QWEN" 30
     tier_a "$DEEPSEEK" 30
   else
     echo "=== round 2: Qwen A (600), B (120), C (120); DeepSeek A (600)"
     tier_a "$QWEN" -
     tier_b "$QWEN" 120
+    tier_b_tool "$QWEN" 120
     tier_c "$QWEN" 120
     tier_a "$DEEPSEEK" -
   fi
