@@ -3,23 +3,33 @@
 import json
 import os
 
+import pytest
+
 from repoqa_ctx import run
 from repoqa_ctx import tasks as T
 
 
-def test_fake_pipeline(mini_dataset, task_cache, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "strategy, budget, stages",
+    [
+        ("full", None, ["answer"]),
+        ("index_select", 2048, ["select", "answer"]),
+        ("cascade", 2048, ["select", "answer"]),
+    ],
+)
+def test_fake_pipeline(strategy, budget, stages, mini_dataset, task_cache, tmp_path, monkeypatch):
     _, path = mini_dataset
     monkeypatch.setattr(T, "TASK_CACHE_DIR", task_cache)
-    args = run.parse_args(
-        [
-            "--strategy", "full",
-            "--llm", "fake",
-            "--fake-mode", "oracle",
-            "--dataset-path", path,
-            "--result-dir", str(tmp_path / "ctx"),
-        ]
-    )  # fmt: skip
-    run_dir = run.run_experiment(args)
+    argv = [
+        "--strategy", strategy,
+        "--llm", "fake",
+        "--fake-mode", "oracle",
+        "--dataset-path", path,
+        "--result-dir", str(tmp_path / "ctx"),
+    ]  # fmt: skip
+    if budget is not None:
+        argv += ["--budget", str(budget)]
+    run_dir = run.run_experiment(run.parse_args(argv))
 
     with open(os.path.join(run_dir, "scores.json"), encoding="utf-8") as f:
         scores = json.load(f)
@@ -28,6 +38,8 @@ def test_fake_pipeline(mini_dataset, task_cache, tmp_path, monkeypatch):
     # 3-token needle (cpp UTF8CharsetEncoder in this subset). See docs/DECISIONS.md.
     assert scores["fake-oracle"]["scores"]["all"]["0.0"]["pass@1"] == 1.0
 
-    # One log line per LLM call: 60 tasks, one answer call each.
+    # One log line per LLM call, tagged with its stage.
     calls = run.read_jsonl(os.path.join(run_dir, "calls.jsonl"))
-    assert len(calls) == 60 and all(c["stage"] == "answer" for c in calls)
+    assert len(calls) == 60 * len(stages)
+    for uid in {c["uid"] for c in calls}:
+        assert [c["stage"] for c in calls if c["uid"] == uid] == stages
