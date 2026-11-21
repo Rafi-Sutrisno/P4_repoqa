@@ -11,6 +11,8 @@ Definitions (per run, and per language with --by-language):
   calls        mean LLM calls per task
   latency      mean seconds per task = context building + all LLM calls
   retention    share of tasks whose whole needle is still in the context
+  compress     compress-stage cost, separate from LLM tokens: mean tokens processed by the
+               compressor model (its own tokenizer) and mean seconds per task
 Dry-run rows count the select calls that were made (fake LLM) plus the answer call that
 would be made.
 """
@@ -43,6 +45,8 @@ COLUMNS = [
     "calls",
     "latency_s",
     "retention",
+    "compress_tokens",
+    "compress_s",
 ]
 
 
@@ -121,6 +125,10 @@ def summarize_run(run: Dict, datasets: Dict, split: str, by_language: bool) -> L
         row["latency_s"] = mean(
             r["ctx"]["build_s"] + sum(call["latency_s"] for call in r["calls"]) for r in group
         )
+        compress = [r["ctx"]["meta"]["compress"] for r in group if "compress" in r["ctx"]["meta"]]
+        if compress:
+            row["compress_tokens"] = mean(c["compress_tokens"] for c in compress)
+            row["compress_s"] = mean(c["compress_s"] for c in compress)
         if scores:
             by_threshold = scores[lang]
             for t in THRESHOLDS:
@@ -136,9 +144,9 @@ def _fmt(key: str, value) -> str:
         return f"{100 * value:.1f}%"
     if key == "ratio":
         return f"{value:.1f}x"
-    if key in ("ctx_tokens", "input_tokens"):
+    if key in ("ctx_tokens", "input_tokens", "compress_tokens"):
         return f"{value:.0f}"
-    if key in ("calls", "latency_s"):
+    if key in ("calls", "latency_s", "compress_s"):
         return f"{value:.2f}"
     return str(value)
 
